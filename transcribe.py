@@ -149,6 +149,60 @@ def transcript_file_name_from_video_file_name(video_file_name):
 
 	return transcript_job_name + ".json"
 
+def format_time(val):
+	secs = float(val)
+	hours = int(secs/3600)
+	secs = secs - (hours * 3600)
+	mins = int(secs/60)
+	secs = secs - (mins * 60)
+	m_secs = int(secs*1000)
+	secs = int(secs)
+	return pad_time(hours) + ':' + pad_time(mins) + ':' + pad_time(secs) + ',' + pad_time(m_secs, 3)
+
+def pad_time(val, l= 2):
+	return ('0'.join([''] * (l+1)) + str(val))[-l:]
+
+def convert_transcribe_to_srt(video_file):
+	if not transcript_exists_in_s3(video_file):
+		logger.info("Transcript for video file %s does not exist" % video_file)
+		return "Failed to convert to srt. Transcript does not exist."
+
+	logger.info("Conversion to srt started for video file: %s" % video_file)
+	with open(transcript_file_name_from_video_file_name(video_file), encoding='utf-8') as f:
+		raw = json.load(f)
+		items = raw['results']['items']
+		start = end = counter = index = 0
+		current = float(items[0]['start_time'])
+		output = next_line = ''
+
+		for token in items:
+			start = format_time(current)
+			if token['type'] == 'punctuation':
+				next_line = next_line[0:-1] + token['alternatives'][0]['content']
+				end = format_time(items[counter - 1]['end_time'])
+				index += 1
+				output += str(index) + '\n' + str(start) + ' --> ' + str(end) + '\n' + next_line + '\n\n'
+				next_line = ''
+				if counter + 1 < len(items):
+					current = float(items[counter + 1]['start_time'])
+			elif float(token['end_time']) - float(token['start_time']) > 5.0:
+				end = format_time(items[counter - 1]['end_time'])
+				index += 1
+				output += str(index) + '\n' + str(start) + ' --> ' + str(end) + '\n' + next_line + '\n\n'
+				next_line = token['alternatives'][0]['content'] + ' '
+				current = float(token['start_time'])
+			else:
+				next_line += token['alternatives'][0]['content'] + ' '
+		
+			start = format_time(current)
+			if items[len(items)-1]['type'] == 'punctuation':
+				end = format_time(items[len(items)-2]['end_time'])
+			else:
+				end = format_time(items[len(items)-1]['end_time'])
+		
+		with open(transcript_file_name_from_video_file_name(video_file).replace('.json', '.srt'), 'w', encoding='utf-8') as f:
+			f.write(output)
+	logger.info("Conversion to srt completed for video file: %s" % video_file)
 
 def transcribe_all():
 	video_files = list_video_files()
@@ -158,6 +212,7 @@ def transcribe_all():
 		logger.info("Starting Transcription of Video File: %s" % video_file)
 		comment = transcribe_video_file(video_file)
 		output[video_file] = comment
+		convert_transcribe_to_srt(video_file)
 
 	return output
 
